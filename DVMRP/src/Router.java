@@ -1,5 +1,6 @@
 import tools.IO;
 
+import java.util.List;
 import java.util.Timer;
 import java.util.TimerTask;
 
@@ -29,7 +30,7 @@ public class Router {
             public void run() {
                 StringBuilder sb = new StringBuilder();
 
-                for (int attachLan = 0; attachLan < obAttachLans.length; attachLan++) {
+                for (int attachIndex = 0; attachIndex < obAttachLans.length; attachIndex++) {
                     // prepare DV
                     sb.setLength(0);
                     for (int tLan = 0; tLan < LAN_TOTAL; tLan++)
@@ -37,7 +38,7 @@ public class Router {
                         int distance = obRoutTable[tLan][0];
                         int nextHopRouter = obRoutTable[tLan][1];
                         int nextHopLan = obRoutTable[tLan][2];
-                        if (distance > 0 && nextHopLan == attachLan)
+                        if (distance > 0 && nextHopLan == obAttachLans[attachIndex])        //last modified
                         {
                             //poison reverse
                             sb.append(LAN_TOTAL + " " + nextHopRouter + " ");
@@ -48,8 +49,8 @@ public class Router {
                         }
                     }
 
-                    IO.instance().write("lan" + obAttachLans[attachLan],
-                            "DV " + obAttachLans[attachLan] + " " + obRouterID + " " + sb.toString());
+                    IO.instance().write("rout" + obRouterID,
+                            "DV " + obAttachLans[attachIndex] + " " + obRouterID + " " + sb.toString());
                 }
             }
         }, 0, ONE_SECOND * 5);
@@ -65,16 +66,20 @@ public class Router {
             @Override
             public void run() {
                 for (int i = 0; i < obAttachLans.length; i++) {
-                    String content = IO.instance().read("lan" + obAttachLans[i]);   //TODO: should read till end
-                    if (content != null) {
-                        String loDataType = content.split(" ")[0];
-                        if ("data".equals(loDataType))
+                    List<String> content = IO.instance().read("lan" + obAttachLans[i]);
+                    for (String line : content) {
+                        String loDataType = line.split(" ")[0];
+                        if ("DV".equals(loDataType))
                         {
-                            multicastData(content);
+                            updateTable(line);
                         }
-                        else if ("DV".equals(loDataType))
+                        else if ("data".equals(loDataType))
                         {
-                            updateTable(content);
+                            multicastData(line);
+                        }
+                        else if ("receiver".equals(loDataType))
+                        {
+
                         }
                     }
                 }
@@ -90,18 +95,40 @@ public class Router {
     private static void updateTable(String arDVmessage)
     {
         String[] parts = arDVmessage.split(" ");
-        int nextHopRouter = Integer.valueOf(parts[2]);
-        int nextHopLan = Integer.valueOf(parts[1]);
+        int attachRouter = Integer.valueOf(parts[2]);
+        int attachLan = Integer.valueOf(parts[1]);
+        //DV message from self
+        if (attachRouter == obRouterID)
+        {
+            return;
+        }
 
         for (int i = 3; i < parts.length; i += 2)
         {
             int lanID = (i - 3) / 2;
             int distance = Integer.valueOf(parts[i]);
-            if (distance < LAN_TOTAL && distance + 1 < obRoutTable[lanID][0])
+            int nextHopFromNeighborTable = Integer.valueOf(parts[i + 1]);
+            if (distance < LAN_TOTAL && distance + 1 <= obRoutTable[lanID][0])
             {
+                // if same distance, update only when router id is smaller
+                if (distance + 1 == obRoutTable[lanID][0] && attachRouter > obRoutTable[lanID][1])
+                {
+                    continue;
+                }
                 obRoutTable[lanID][0] = distance + 1;
-                obRoutTable[lanID][1] = nextHopRouter;
-                obRoutTable[lanID][2] = nextHopLan;
+                obRoutTable[lanID][1] = attachRouter;
+                obRoutTable[lanID][2] = attachLan;
+            }
+            // update child map by using poison reverse
+            else if (distance == LAN_TOTAL && nextHopFromNeighborTable == obRouterID)
+            {
+                // neighbor router/lan use me as next hop to lanID
+                int bit = 1;
+                for (int b = 0; b < attachLan; b++)
+                {
+                    bit <<= 1;
+                }
+                obRoutTable[lanID][3] |= bit;
             }
         }
     }
@@ -111,7 +138,29 @@ public class Router {
      */
     private static void multicastData(String arContent)
     {
+        String[] parts = arContent.split(" ");
+        int curLanID = Integer.valueOf(parts[1]);
+        int hostLanID = Integer.valueOf(parts[2]);
 
+        // check parent lan
+        int parentLan = obRoutTable[hostLanID][2];
+        if (parentLan != curLanID)
+        {
+            return;
+        }
+
+        // forward to child lan
+        int bitmap = obRoutTable[hostLanID][3];     //last modified
+        int childLan = 0;
+        while (bitmap > 0)
+        {
+            if((bitmap & 1) == 1) {
+                IO.instance().write("rout" + obRouterID,
+                        parts[0] + " " + childLan + " " + hostLanID);
+            }
+            childLan += 1;
+            bitmap >>= 1;
+        }
     }
 
     /**

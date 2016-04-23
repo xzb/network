@@ -68,21 +68,19 @@ public class Controller
             public void run() {
                 // transfer message from houtX to lanX
                 for (int i = 0; i < obHosts.length; i++) {
-                    String content = IO.instance().read("hout" + obHosts[i]);   //TODO: should read till end
-                    if (content != null) {
-                        String destLanID = content.split(" ")[1];
-                        IO.instance().write("lan" + destLanID,
-                                content);
+                    List<String> content = IO.instance().read("hout" + obHosts[i]);   //TODO: should read till end
+                    for(String line : content) {
+                        String destLanID = line.split(" ")[1];
+                        IO.instance().write("lan" + destLanID, line);
                     }
                 }
 
                 // transfer message from routX to lanX
                 for (int i = 0; i < obRouters.length; i++) {
-                    String content = IO.instance().read("rout" + obRouters[i]);
-                    if (content != null) {
-                        String destLanID = content.split(" ")[1];
-                        IO.instance().write("lan" + destLanID,
-                                content);
+                    List<String> content = IO.instance().read("rout" + obRouters[i]);
+                    for (String line : content) {
+                        String destLanID = line.split(" ")[1];
+                        IO.instance().write("lan" + destLanID, line);
                     }
                 }
             }

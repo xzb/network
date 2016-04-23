@@ -2,6 +2,8 @@ package tools;
 
 import java.io.*;
 import java.util.HashMap;
+import java.util.LinkedList;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -10,14 +12,15 @@ import java.util.Map;
 public class IO
 {
     private static IO obInstance;
-//    private static BufferedWriter obBufWriter;
-//    private static BufferedReader obBufReader;
     private static Map<String, Long> obFileOffset;
     private final static String DIR = "file/";
+    private static List<String> readContent;
+
     private IO()
     {
         obFileOffset = new HashMap<String, Long>();
         new File(DIR).mkdir();
+        readContent = new LinkedList<String>();
     }
     public static IO instance()
     {
@@ -28,8 +31,32 @@ public class IO
         return obInstance;
     }
 
-    public String read(String arFile) {
-        String content = null;
+//    public String read(String arFile) {
+//        String content = null;
+//        try {
+//            FileReader fr = new FileReader(DIR + arFile);
+//            BufferedReader bfr = new BufferedReader(fr);
+//
+//            Long loOffset = obFileOffset.get(arFile);
+//            if (loOffset == null)
+//            {
+//                loOffset = 0l;
+//            }
+//            loOffset = bfr.skip(loOffset);
+//            if ((content = bfr.readLine()) != null) {
+//                loOffset += content.toCharArray().length + 1;       //1 for "\n"
+//                obFileOffset.put(arFile, loOffset);
+//            }
+//            // TODO: close oldest when capacity reach 30
+//            bfr.close();
+//        } catch (IOException e) {
+////            e.printStackTrace();
+//        }
+//        return content;
+//    }
+
+    public List<String> read(String arFile) {
+        readContent.clear();
         try {
             FileReader fr = new FileReader(DIR + arFile);
             BufferedReader bfr = new BufferedReader(fr);
@@ -40,16 +67,20 @@ public class IO
                 loOffset = 0l;
             }
             loOffset = bfr.skip(loOffset);
-            if ((content = bfr.readLine()) != null) {
-                loOffset += content.toCharArray().length + 1;       //1 for "\n"
-                obFileOffset.put(arFile, loOffset);
+
+            String line;
+            if ((line = bfr.readLine()) != null) {
+                loOffset += line.toCharArray().length + 1;       //1 for "\n"
+                readContent.add(line);
             }
+            obFileOffset.put(arFile, loOffset);
+
             // TODO: close oldest when capacity reach 30
             bfr.close();
         } catch (IOException e) {
 //            e.printStackTrace();
         }
-        return content;
+        return readContent;
     }
 
     public void write(String arFile, String arContent)

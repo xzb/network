@@ -1,5 +1,6 @@
 import tools.IO;
 
+import java.util.List;
 import java.util.Timer;
 import java.util.TimerTask;
 
@@ -15,6 +16,7 @@ public class Host
     private static long obPeriod;
 
     private static String obHoutFile;
+    private static String obHinFile;
 
     private final static long ONE_SECOND = 1000;
 
@@ -28,8 +30,7 @@ public class Host
         loTimer.scheduleAtFixedRate(new TimerTask() {
             @Override
             public void run() {
-                IO.instance().write(obHoutFile,
-                        "receiver " + obLanID);
+                IO.instance().write(obHoutFile, "receiver " + obLanID);
             }
         }, 0, ONE_SECOND * 10);
     }
@@ -43,11 +44,13 @@ public class Host
         loCheckTimer.scheduleAtFixedRate(new TimerTask() {
             @Override
             public void run() {
-                String content = IO.instance().read("lan" + obLanID);
-                if (content != null)
+                List<String> content = IO.instance().read("lan" + obLanID);
+                for (String line : content)
                 {
-                    IO.instance().write(obHoutFile,
-                            content);
+                    String[] parts = line.split(" ");
+                    if ("data".equals(parts[0])) {
+                        IO.instance().write(obHinFile, line);
+                    }
                 }
             }
         }, ONE_SECOND, ONE_SECOND);
@@ -64,8 +67,7 @@ public class Host
         loSendTimer.scheduleAtFixedRate(new TimerTask() {
             @Override
             public void run() {
-                IO.instance().write(obHoutFile,
-                        "data " + obLanID + " " + obHostID);
+                IO.instance().write(obHoutFile, "data " + obLanID + " " + obHostID);
             }
         }, obTimeToStart, obPeriod);
 
@@ -85,6 +87,7 @@ public class Host
         obLanID = args[1];
         obType = args[2];
         obHoutFile = "hout" + obHostID;
+        obHinFile = "hin" + obHostID;
 
         if ("receiver".equals(obType.toLowerCase()))
         {
