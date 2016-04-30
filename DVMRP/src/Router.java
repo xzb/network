@@ -18,6 +18,13 @@ public class Router {
     private final static int LAN_TOTAL = 10;
     private final static long ONE_SECOND = 1000;
 
+    private static Map<Integer, Map<Integer, Set<Integer>>> obSourceRouterMap;    //key1 is hostLanID, key2 is attachLanID, value is child routers
+    private static Map<Integer, Map<Integer, Set<Integer>>> obNMRRouters;
+    private static Set<Integer> obNonMemOfHostLan;      //save the host_lan_id which this router is not a member
+    private static Timer obNMRSendTimer;
+
+//    private static int NonMemReportExpire = 20;
+//    private static int MemReportExpire = 20;
 
     /**
      * Every 5 seconds, each router will send a distance vector message to each of its LAN
@@ -66,6 +73,9 @@ public class Router {
         loCheckTimer.scheduleAtFixedRate(new TimerTask() {
             @Override
             public void run() {
+//                NonMemReportExpire--;
+//                MemReportExpire--;
+
                 for (int i = 0; i < obAttachLans.length; i++) {
                     List<String> content = IO.instance().read("lan" + obAttachLans[i]);
                     for (String line : content) {
@@ -88,7 +98,11 @@ public class Router {
                         {
                             // save receiver position,
                             // if this lan is not in bitmap, need to check which of neighbor routers to forward package
-                            obLanWithReceivers.add(obAttachLans[i]);       //all router may set to 1 at start time
+                            obLanWithReceivers.add(obAttachLans[i]);
+                        }
+                        else if ("NMR".equals(loDataType))
+                        {
+                            handleNonMemReport(line);
                         }
                     }
                 }
@@ -138,6 +152,20 @@ public class Router {
                     bit <<= 1;
                 }
                 obRoutTable[lanID][3] |= bit;
+
+                // save child router of hostLanID
+                if (obSourceRouterMap.get(lanID) == null)
+                {
+                    obSourceRouterMap.put(lanID, new HashMap<Integer, Set<Integer>>());
+                }
+                Map<Integer, Set<Integer>> lanToRouters = obSourceRouterMap.get(lanID);
+                if (lanToRouters.get(attachLan) == null)
+                {
+                    lanToRouters.put(attachLan, new HashSet<Integer>());
+                }
+                Set<Integer> routers = lanToRouters.get(attachLan);
+
+                routers.add(attachRouter);
             }
         }
     }
@@ -161,22 +189,40 @@ public class Router {
         // forward to child lan
         int bitmap = obRoutTable[hostLanID][3];     //last modified
         int childLan = 0;
+        boolean hasForward = false;
         while (childLan < LAN_TOTAL)
         {
             if((bitmap & 1) == 1) {
-                IO.instance().write("rout" + obRouterID,
-                        parts[0] + " " + childLan + " " + hostLanID);
+                // though bitmap has 1, should check if this lan receive NMR from all child routers
+                if (!obSourceRouterMap.get(hostLanID).equals(obNMRRouters.get(hostLanID)))
+                {
+                    IO.instance().write("rout" + obRouterID,
+                            parts[0] + " " + childLan + " " + hostLanID);
+                    hasForward = true;
+                }
             }
-            // handle receiver in lan
-            else if (obLanWithReceivers.contains(childLan))
+            // if not forward, handle receiver in lan
+            if (!hasForward && obLanWithReceivers.contains(childLan))           //last modified
             {
                 if (handleReceiverInLan(childLan, hostLanID)) {
                     IO.instance().write("rout" + obRouterID,
                             parts[0] + " " + childLan + " " + hostLanID);
+                    hasForward = true;
                 }
             }
             childLan += 1;
             bitmap >>= 1;
+        }
+
+        // not bitmap and no receiver, the first router to send NMR
+        if (!hasForward)
+        {
+            obNonMemOfHostLan.add(hostLanID);
+            sendNonMemReport();     // only first NMR is sent immediately
+        }
+        else
+        {
+            obNonMemOfHostLan.remove(hostLanID);
         }
     }
 
@@ -225,6 +271,76 @@ public class Router {
     }
 
     /**
+     * after received NMR from child router, determine if myselft should send NMR to parent
+     * @param arReport
+     */
+    private static void handleNonMemReport(String arReport)
+    {
+        String[] parts = arReport.split(" ");
+        int attachLanId = Integer.valueOf(parts[1]);
+        int routerId = Integer.valueOf(parts[2]);
+        int hostLanId = Integer.valueOf(parts[3]);
+
+        // check if the attachRouter is my child router, w.r.t. hostLanID
+        String loDVmessage = obNeighborDV.get(routerId);
+        if (loDVmessage == null)
+        {
+            return;
+        }
+        String[] DVparts = loDVmessage.split(" ");
+        int distIndex = hostLanId * 2 + 3;
+        int distance = Integer.valueOf(DVparts[distIndex]);
+        int nextHopFromNeighborTable = Integer.valueOf(DVparts[distIndex + 1]);
+        if (distance == LAN_TOTAL && nextHopFromNeighborTable == obRouterID)
+        {
+            // is my child router
+        }
+        else
+        {
+            return;
+        }
+
+        if (routerId != obRouterID)
+        {
+            if (obNMRRouters.get(hostLanId) == null)
+            {
+                obNMRRouters.put(hostLanId, new HashMap<Integer, Set<Integer>>());
+            }
+            Map<Integer, Set<Integer>> lanToRouters = obNMRRouters.get(hostLanId);
+            if (lanToRouters.get(attachLanId) == null)
+            {
+                lanToRouters.put(attachLanId, new HashSet<Integer>());
+            }
+            Set<Integer> routers = lanToRouters.get(attachLanId);
+
+            routers.add(routerId);
+        }
+    }
+    /**
+     * NMR lan-id router-id host-lan-id
+     */
+    private static void sendNonMemReport()
+    {
+        if (obNMRSendTimer != null) {
+//            obNMRSendTimer.cancel();
+//            obNMRSendTimer.purge();
+            return;
+        }
+
+        obNMRSendTimer = new Timer();
+        obNMRSendTimer.scheduleAtFixedRate(new TimerTask() {
+            @Override
+            public void run() {
+                for (int hostLanID : obNonMemOfHostLan) {
+                    int parentLanID = obRoutTable[hostLanID][2];
+                    IO.instance().write("rout" + obRouterID,
+                            "NMR " + parentLanID + " " + obRouterID + " " + hostLanID);
+                }
+            }
+        }, 0, ONE_SECOND * 10);
+    }
+
+    /**
      * @param args router-id lan-ID lan-ID lan-ID ...
      */
     public static void main(String[] args)
@@ -257,6 +373,10 @@ public class Router {
 
         obNeighborDV = new HashMap<Integer, String>();
         obLanWithReceivers = new HashSet<Integer>();
+
+        obSourceRouterMap = new HashMap<Integer, Map<Integer, Set<Integer>>>();
+        obNMRRouters = new HashMap<Integer, Map<Integer, Set<Integer>>>();
+        obNonMemOfHostLan = new HashSet<Integer>();
 
         sendDVmessage();
         processDataFromLan();
