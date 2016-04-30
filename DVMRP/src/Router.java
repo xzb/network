@@ -1,8 +1,6 @@
 import tools.IO;
 
-import java.util.List;
-import java.util.Timer;
-import java.util.TimerTask;
+import java.util.*;
 
 /**
  * Created by xiezebin on 4/20/16.
@@ -12,7 +10,10 @@ public class Router {
     private static int obRouterID;
     private static int[] obAttachLans;
 
-    private static int obRoutTable[][];        //lan -> distance -> next hop
+    private static int obRoutTable[][];         //lan -> distance -> next hop
+
+    private static Map<Integer, String> obNeighborDV;   //key is routerID
+    private static Set<Integer> obLanWithReceivers;
 
     private final static int LAN_TOTAL = 10;
     private final static long ONE_SECOND = 1000;
@@ -72,6 +73,12 @@ public class Router {
                         if ("DV".equals(loDataType))
                         {
                             updateTable(line);
+
+                            int attachRouter = Integer.valueOf(line.split(" ")[2]);
+                            if (attachRouter != obRouterID)
+                            {
+                                obNeighborDV.put(attachRouter, line);
+                            }
                         }
                         else if ("data".equals(loDataType))
                         {
@@ -79,7 +86,9 @@ public class Router {
                         }
                         else if ("receiver".equals(loDataType))
                         {
-
+                            // save receiver position,
+                            // if this lan is not in bitmap, need to check which of neighbor routers to forward package
+                            obLanWithReceivers.add(obAttachLans[i]);       //all router may set to 1 at start time
                         }
                     }
                 }
@@ -152,14 +161,66 @@ public class Router {
         // forward to child lan
         int bitmap = obRoutTable[hostLanID][3];     //last modified
         int childLan = 0;
-        while (bitmap > 0)
+        while (childLan < LAN_TOTAL)
         {
             if((bitmap & 1) == 1) {
                 IO.instance().write("rout" + obRouterID,
                         parts[0] + " " + childLan + " " + hostLanID);
             }
+            // handle receiver in lan
+            else if (obLanWithReceivers.contains(childLan))
+            {
+                if (handleReceiverInLan(childLan, hostLanID)) {
+                    IO.instance().write("rout" + obRouterID,
+                            parts[0] + " " + childLan + " " + hostLanID);
+                }
+            }
             childLan += 1;
             bitmap >>= 1;
+        }
+    }
+
+    /**
+     * For each destination lan
+     * 1. if parent lan is lanId, ignore
+     * 2. if myself has minimum hop, should forward package
+     * 3. if hops num are same, myself has minimum router id, should forward package
+     * @param arLanId
+     */
+    private static boolean handleReceiverInLan(int arLanId, int arHostLanID)
+    {
+        // parent lan was current lan, is already in bitmap of parent router
+        if (obRoutTable[arHostLanID][2] == arLanId)
+        {
+            return false;
+        }
+        // leaf lan, not in any bitmap
+        else if (obNeighborDV.isEmpty())
+        {
+            return true;
+        }
+        // between two routers, should check with router to forward the multicast
+        else
+        {
+            int curHops = obRoutTable[arHostLanID][0];
+            for (Map.Entry<Integer, String> entry: obNeighborDV.entrySet())
+            {
+                int attachRouter = entry.getKey();
+                String loDVmessage = entry.getValue();
+                String[] parts = loDVmessage.split(" ");
+                int loLanID = Integer.valueOf(parts[1]);
+
+                if (loLanID == arLanId)
+                {
+                    int distIndex = arHostLanID * 2 + 3;
+                    int neighborHops = Integer.valueOf(parts[distIndex]);
+                    if (neighborHops < curHops || (neighborHops == curHops && attachRouter < obRouterID))
+                    {
+                        return false;
+                    }
+                }
+            }
+            return true;
         }
     }
 
@@ -193,6 +254,9 @@ public class Router {
             obRoutTable[lanID][1] = obRouterID;
             obRoutTable[lanID][2] = lanID;
         }
+
+        obNeighborDV = new HashMap<Integer, String>();
+        obLanWithReceivers = new HashSet<Integer>();
 
         sendDVmessage();
         processDataFromLan();
