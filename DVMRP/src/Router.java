@@ -23,8 +23,8 @@ public class Router {
     private static Set<Integer> obNonMemOfHostLan;      //save the host_lan_id which this router is not a member
     private static Timer obNMRSendTimer;
 
-//    private static int NonMemReportExpire = 20;
-//    private static int MemReportExpire = 20;
+    private static Map<Integer, Integer> obNMRExpireMap;                  //key is router id, value is [0, 20]
+    private final static int LIVING_TIME_BEFORE_EXPIRE = 20;
 
     /**
      * Every 5 seconds, each router will send a distance vector message to each of its LAN
@@ -73,8 +73,7 @@ public class Router {
         loCheckTimer.scheduleAtFixedRate(new TimerTask() {
             @Override
             public void run() {
-//                NonMemReportExpire--;
-//                MemReportExpire--;
+                decreaseNonMemReportExpire();
 
                 for (int i = 0; i < obAttachLans.length; i++) {
                     List<String> content = IO.instance().read("lan" + obAttachLans[i]);
@@ -99,6 +98,19 @@ public class Router {
                             // save receiver position,
                             // if this lan is not in bitmap, need to check which of neighbor routers to forward package
                             obLanWithReceivers.add(obAttachLans[i]);
+
+                            // if is sending NMR, check whether this receiver can stop NMR
+                            if (!obNonMemOfHostLan.isEmpty())
+                            {
+                                Set<Integer> loRemove = new HashSet<Integer>();
+                                int loLanId = Integer.valueOf(line.split(" ")[1]);
+                                for (int hostLanId : obNonMemOfHostLan) {
+                                    if (handleReceiverInLan(loLanId, hostLanId)) {
+                                        loRemove.add(hostLanId);
+                                    }
+                                }
+                                obNonMemOfHostLan.removeAll(loRemove);
+                            }
                         }
                         else if ("NMR".equals(loDataType))
                         {
@@ -293,7 +305,7 @@ public class Router {
         int nextHopFromNeighborTable = Integer.valueOf(DVparts[distIndex + 1]);
         if (distance == LAN_TOTAL && nextHopFromNeighborTable == obRouterID)
         {
-            // is my child router
+            // is my child router, accept the report
         }
         else
         {
@@ -314,6 +326,7 @@ public class Router {
             Set<Integer> routers = lanToRouters.get(attachLanId);
 
             routers.add(routerId);
+            obNMRExpireMap.put(routerId, LIVING_TIME_BEFORE_EXPIRE);
         }
     }
     /**
@@ -338,6 +351,34 @@ public class Router {
                 }
             }
         }, 0, ONE_SECOND * 10);
+    }
+
+    private static void decreaseNonMemReportExpire()
+    {
+        Set<Integer> loRemoveRouterId = new HashSet<Integer>();
+        for (Map.Entry<Integer, Integer> entry : obNMRExpireMap.entrySet())
+        {
+            if (entry.getValue() <= 1)
+            {
+                loRemoveRouterId.add(entry.getKey());
+            }
+            else
+            {
+                obNMRExpireMap.put(entry.getKey(), entry.getValue() - 1);
+            }
+        }
+        for (Integer routerId : loRemoveRouterId)
+        {
+            obNMRExpireMap.remove(routerId);
+        }
+        // find out the place in router map, and remove it
+        for (Map.Entry<Integer, Map<Integer, Set<Integer>>> entry : obNMRRouters.entrySet())
+        {
+            for (Map.Entry<Integer, Set<Integer>> lanRouterEntry : entry.getValue().entrySet())
+            {
+                lanRouterEntry.getValue().removeAll(loRemoveRouterId);
+            }
+        }
     }
 
     /**
@@ -377,6 +418,7 @@ public class Router {
         obSourceRouterMap = new HashMap<Integer, Map<Integer, Set<Integer>>>();
         obNMRRouters = new HashMap<Integer, Map<Integer, Set<Integer>>>();
         obNonMemOfHostLan = new HashSet<Integer>();
+        obNMRExpireMap = new HashMap<Integer, Integer>();
 
         sendDVmessage();
         processDataFromLan();
